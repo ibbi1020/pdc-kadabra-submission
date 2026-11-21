@@ -105,6 +105,8 @@ The sequential sampler and the simple parallel version are a few hundred lines e
 
 Threads draw independent samples in parallel. The shared state is the table of per node scores and a counter of samples taken. The one place that needs care is the stopping check, where the threads have to agree on a consistent set of totals before the rule is evaluated. The simple version reaches that agreement with a barrier after every batch. The lighter version reaches it by having threads accumulate privately and publish their totals in rounds, so the check reads a finished round without stopping everyone. Comparing these two is the core of the work.
 
+Two correctness rules hold in both versions, and they matter most in the lighter one. First, the stopping decision and the estimate we report use exactly the same set of samples, the ones in the snapshot the check read. We never fold in samples that were still being computed when the snapshot was taken. KADABRA's accuracy guarantee is stated for the samples the decision was based on, so quietly adding more afterward would void it. Second, that snapshot is always a whole number of finished samples taken at a round boundary, never a cut decided by the clock. This second rule is not a detail. Cheaper samples, which tend to be short paths, finish first, so a snapshot taken by time rather than by completed rounds would over represent short paths and bias every node's score. Taking the snapshot at a round boundary is what keeps the sample set honest.
+
 \subsection{What we are contributing}
 
 Beyond the simple parallel loop, which is the 2019 baseline, our contribution is a measured study of two things that paper did not put at the centre. The first is how much the barrier actually costs on small graphs on ordinary hardware, which we show by reproducing the barrier version and the lighter version side by side. The second is how the round length changes the balance between synchronization overhead and wasted samples. Throughout, we keep KADABRA's stopping rule unchanged, so the accuracy guarantee still holds and any error we report belongs to the sampling, not to a broken rule.
@@ -130,7 +132,7 @@ A reference implementation of KADABRA exists at \url{https://github.com/natema/k
 \[
 S = \frac{T_{\text{serial}}}{T_{\text{parallel}}}, \qquad E = \frac{S}{P},
 \]
-where $P$ is the number of threads. To compare fairly, we fix the number of samples when timing, so the serial and parallel runs do the same amount of work. We time only the sampling part, separately from loading the graph and printing results, and we report the median of several runs with their spread. We will also pin threads and note the machine, the core count, the compiler, and the flags.
+where $P$ is the number of threads. Our main timing runs the full algorithm with the adaptive stopping rule switched on, and measures the wall clock time to reach the target accuracy. This is the setting where the two versions actually differ, because the barrier version pays for a barrier and a stopping check on every round while the lighter version does not. If we instead fixed the number of samples and turned the checks off, that cost would vanish and we would be measuring nothing about the thing we set out to study. Alongside each timed run we record how many samples it took, so we can confirm the two versions converge on a comparable amount of work rather than being compared on different amounts of sampling. As a separate measurement, we also run a fixed number of samples with the stopping check off, which isolates the raw speed of the sampling itself from the stopping machinery. We time only the sampling and aggregation, separately from loading the graph and printing results, report the median of several runs with their spread over many seeds, pin threads, and note the machine, the core count, the compiler, and the flags.
 
 \subsection{Risks and how we handle them}
 
@@ -138,6 +140,7 @@ where $P$ is the number of threads. To compare fairly, we fix the number of samp
   \item \textbf{The speedup is small or noisy on small graphs.} Likely. We use larger and higher diameter graphs where there is more work to share, time only the sampling kernel, repeat runs, and present a small result as an honest finding with an explanation.
   \item \textbf{Races on the shared table, or an inconsistent stopping check.} We use correct atomic updates and a consistent snapshot, and we check the single threaded version against the exact answer before trusting the parallel one.
   \item \textbf{Biased path sampling.} A subtle bug can bias which paths get sampled. We test on graphs with many tied shortest paths, where a bias would show up.
+  \item \textbf{Timing bias in the lighter version.} Because cheaper samples finish first, deciding the snapshot by the clock would over represent short paths. We fix this by defining the snapshot as a whole number of finished rounds and reporting exactly the samples the stopping decision saw, never the ones still in flight.
   \item \textbf{Random seeds across threads.} We fix a master seed and give each thread its own well separated stream, so results are repeatable.
 \end{itemize}
 
