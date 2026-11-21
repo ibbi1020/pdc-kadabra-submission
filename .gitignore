@@ -1,0 +1,19 @@
+.DS_Store
+# Build artifacts
+*.o
+*.obj
+*.out
+*.exe
+a.out
+build/
+bin/
+# Editor backups
+*~
+*.swp
+# LaTeX intermediates (keep the final PDFs)
+*.aux
+*.log
+*.toc
+*.fls
+*.fdb_latexmk
+*.synctex.gz
