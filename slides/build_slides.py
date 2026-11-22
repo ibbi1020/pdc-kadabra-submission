@@ -382,39 +382,41 @@ def schedule_chart(path, w, h):
 
 
 def k_chart(path, w, h):
-    u = np.linspace(0, 4, 500)
-    k = 10 ** u
-    barrier = 3.0 * np.exp(-1.1 * u)
-    waste = 0.12 * np.exp(0.9 * u)
-    base = 0.6
-    total = base + barrier + waste
+    k = np.logspace(0, 5, 600)
+    graphs = [
+        ("many vertices, cheap samples", TEAL, 2100.0, 0.00093),
+        ("high diameter, costly samples", ORANGE, 90.0, 0.025),
+    ]
     fig, ax = plt.subplots(figsize=(w, h))
-    ax.plot(k, base + barrier, color="#" + TEAL, lw=1.8, label="barrier + merge cost")
-    ax.plot(k, base + waste, color="#" + ORANGE, lw=1.8, label="samples taken past the stop")
-    ax.plot(k, total, color="#" + NAVY, lw=2.8, label="time to a valid stop")
-    best = int(np.argmin(total))
-    ax.scatter([k[best]], [total[best]], s=46, color="#" + NAVY, zorder=5)
-    ax.annotate("best k: to be measured", xy=(k[best], total[best]),
-                xytext=(k[best], total[best] - 1.15), fontsize=8.5, color="#" + NAVY,
-                ha="center", va="top",
-                arrowprops=dict(arrowstyle="-", color="#" + NAVY, lw=0.8))
+    for label, color, a, b in graphs:
+        total = 1.0 + a / k + b * k
+        ax.plot(k, total, color="#" + color, lw=2.4, label=label)
+        k_best = np.sqrt(a / b)
+        t_best = 1.0 + 2 * np.sqrt(a * b)
+        ax.scatter([k_best], [t_best], s=44, color="#" + color, zorder=5)
+        ax.annotate("$k^*$", xy=(k_best, t_best), xytext=(k_best, t_best - 0.75),
+                    fontsize=10, color="#" + color, ha="center", va="top")
+    ax.axvline(1000, color="#" + NAVY, lw=1.1, ls=(0, (4, 3)))
+    ax.text(1000 / 1.2, 1.9, "fixed N = 1000\n(2019 paper)", fontsize=8, color="#" + NAVY,
+            va="top", ha="right", multialignment="right")
     ax.set_xscale("log")
-    ax.xaxis.set_major_locator(FixedLocator([1, 10, 100, 1000, 10000]))
-    ax.xaxis.set_major_formatter(FixedFormatter(["1", "10", "$10^2$", "$10^3$", "$10^4$"]))
+    ax.xaxis.set_major_locator(FixedLocator([1, 10, 100, 1000, 10000, 100000]))
+    ax.xaxis.set_major_formatter(FixedFormatter(["1", "10", "$10^2$", "$10^3$", "$10^4$",
+                                                 "$10^5$"]))
     ax.xaxis.set_minor_locator(FixedLocator([]))
-    ax.set_ylim(0, 6.2)
+    ax.set_ylim(0, 7.6)
     ax.set_yticks([])
-    ax.set_xlabel("batch length k  (samples between stopping tests)", fontsize=8.5,
+    ax.set_xlabel("check interval k  (samples between stopping tests)", fontsize=8.5,
                   color="#" + MUTED)
-    ax.set_ylabel("cost", fontsize=8.5, color="#" + MUTED)
+    ax.set_ylabel("time to a valid stop", fontsize=8.5, color="#" + MUTED)
     for side in ("top", "right"):
         ax.spines[side].set_visible(False)
     for side in ("bottom", "left"):
         ax.spines[side].set_color("#" + EDGE)
     ax.tick_params(axis="both", length=0, colors="#" + MUTED, labelsize=8.5)
-    ax.legend(frameon=False, fontsize=8.5, loc="upper center", ncol=1,
-              bbox_to_anchor=(0.5, 1.02), labelcolor="#" + INK)
-    ax.text(0.99, 0.03, "expected shape, not a measurement", transform=ax.transAxes,
+    ax.legend(frameon=False, fontsize=8.5, loc="lower center", bbox_to_anchor=(0.5, 1.0),
+              ncol=2, labelcolor="#" + INK, handlelength=1.6, columnspacing=1.4)
+    ax.text(0.99, 0.03, "model shape, not a measurement", transform=ax.transAxes,
             ha="right", va="bottom", fontsize=8, color="#" + MUTED, style="italic")
     fig.tight_layout()
     fig.savefig(path, dpi=300, facecolor="white")
@@ -709,61 +711,71 @@ def slide_scope(prs, n):
     heading(s, "Scope, challenge, and complexity", "What we will build, and what we leave out")
 
     with capture() as build_card:
-        top = card(s, 0.6, 1.55, 7.45, 3.95, "What we build", accent=TEAL)
+        top = card(s, 0.6, 1.5, 7.45, 3.55, "What we build (committed)", accent=TEAL)
     rows = [
         ("BASELINE", TEAL, "Sequential adaptive sampler + Brandes oracle",
          "Our own C++ on CSR graphs. One-sided BFS from s with σ-weighted backtracking "
          "from t; exact Brandes as ground truth."),
-        ("TWO PARALLEL VERSIONS", NAVY, "Barrier loop + lock-free local-frame",
-         "The barrier loop is the 2019 baseline and our fallback. The local-frame version "
-         "drops the barrier using epochs, and is the piece we measure."),
-        ("OUR CONTRIBUTION", ORANGE, "Three studies on those loops",
-         "Barrier vs lock-free at a few cores; static vs dynamic vs guided; how often to "
-         "run the stopping test. KADABRA's rule stays unchanged."),
+        ("PARALLEL BASELINE", NAVY, "OpenMP batch loop with a barrier",
+         "Independent samples in parallel; barrier before each stopping test. This is the "
+         "synchronized loop the 2019 paper measured."),
+        ("OUR CONTRIBUTION", ORANGE, "Predicted check interval k^{*}",
+         "A cost model sets the stopping-test interval from the graph and thread count, "
+         "replacing the 2019 fixed N = 1000. Plus a schedule comparison."),
     ]
-    y = top - 0.05
+    y = top - 0.08
     row_steps = []
     for i, (tag, color, title, body) in enumerate(rows):
         with capture() as row:
-            badge(s, 0.88, y + 0.02, 0.42, str(i + 1), fill=color, size=13)
-            cw = chip(s, 1.48, y + 0.08, tag, fill=color, size=8.5)
-            text(s, 1.48 + cw + 0.14, y + 0.03, 5.6 - cw, 0.35, title, size=14, color=NAVY,
+            badge(s, 0.88, y + 0.02, 0.38, str(i + 1), fill=color, size=12)
+            cw = chip(s, 1.42, y + 0.06, tag, fill=color, size=8)
+            text(s, 1.42 + cw + 0.12, y + 0.02, 5.7 - cw, 0.32, title, size=13.5, color=NAVY,
                  font=FONT_SEMI)
-            text(s, 1.48, y + 0.43, 6.3, 0.6, body, size=12, color=INK, spacing=1.1)
+            text(s, 1.42, y + 0.38, 6.35, 0.55, body, size=11.5, color=INK, spacing=1.08)
         row_steps.append(step(row, dur=450))
-        y += 1.0
+        y += 0.9
 
     with capture() as out_card:
-        top = card(s, 8.3, 1.55, 4.43, 3.95, "Deliberately left out", accent=MUTED)
-    out_list = text(s, 8.58, top, 3.95, 3.0, [
+        top = card(s, 8.3, 1.5, 4.43, 3.55, "Deliberately left out", accent=MUTED)
+    out_list = text(s, 8.58, top, 3.95, 2.7, [
         "Balanced bidirectional BFS (explained, not built)",
         "Top-k stopping test",
         "Weighted, dynamic, and edge betweenness",
-        "shared-frame and indexed-frame (we build local-frame)",
+        "2019 shared- and indexed-frame variants",
         "MPI and GPU samplers",
         "New bounds, or beating SILVAN on samples",
-    ], size=13, color=INK, bullet="×", bullet_color=ORANGE, after=5)
+    ], size=12.5, color=INK, bullet="×", bullet_color=ORANGE, after=4)
+
+    with capture() as stretch:
+        box(s, 0.6, 5.2, 12.13, 0.72, fill=ORANGE_LIGHT, rounded=True, radius=0.1)
+        chip(s, 0.88, 5.35, "PLANNED", fill=ORANGE, size=9, w=1.0)
+        text(s, 2.05, 5.28, 10.4, 0.58,
+             "**2019 local-frame**, our planned second pillar and the hands-on parallel piece: "
+             "does its advantage survive at a few cores on small graphs, and does an adapted "
+             "cost model predict its epoch length? Gated on the accuracy check; barrier is the fallback.",
+             size=12.5, color=INK, anchor=MSO_ANCHOR.MIDDLE)
 
     with capture() as prior:
-        box(s, 0.6, 5.72, 12.13, 1.06, fill=PANEL, rounded=True, radius=0.1)
-        text(s, 0.88, 5.83, 11.6, 0.9, [
-            {"t": "**Prior work is our baseline, not our claim.**  van der Grinten, Angriman & "
-                  "Meyerhenke (Euro-Par 2019): OpenMP KADABRA, synchronized loop plus lock-free "
-                  "epochs; we rebuild one variant, local-frame, as a measured baseline. van der "
-                  "Grinten & Meyerhenke (IPDPS 2020): MPI, context only. natema/kadabra "
-                  "(Apache-2.0): used only to check f, g, and computeDelta.", "size": 12, "spacing": 1.12},
+        box(s, 0.6, 6.08, 12.13, 0.72, fill=PANEL, rounded=True, radius=0.1)
+        text(s, 0.88, 6.15, 11.6, 0.58, [
+            {"t": "**Prior work is our baseline, not our claim.**  van der Grinten et al. "
+                  "(Euro-Par 2019): synchronized loop + tuned N = 1000 + lock-free epochs. "
+                  "IPDPS 2020: MPI, context only. natema/kadabra (Apache-2.0): check f, g, "
+                  "computeDelta only.", "size": 12, "spacing": 1.08},
         ], anchor=MSO_ANCHOR.MIDDLE)
     footer(s, n)
     animate(s, [step(build_card, dur=400)] + row_steps + [
         step(out_card, dur=400),
         step([out_list], effect="wipe_down", dur=900),
-        step(prior, dur=500),
+        step(stretch, dur=450),
+        step(prior, dur=400),
     ])
-    notes(s, "Four pieces: the sequential sampler with Brandes, the OpenMP barrier loop as "
-             "baseline and fallback, a lock-free local-frame version, and three studies on top. "
-             "The lock-free mechanism is the 2019 authors', re-implemented as a measured "
-             "baseline, not claimed as ours. Dropping it would leave a very thin contribution, "
-             "which is why it is back in. Everything left out is on the right.")
+    notes(s, "Three committed pieces: our sequential sampler with Brandes, the plain OpenMP "
+             "barrier loop, and our predicted check interval, with a schedule comparison on "
+             "the side. The 2019 lock-free method and their tuned N = 1000 are their work. "
+             "We then rebuild their local-frame version as a planned second pillar, to test "
+             "whether its advantage survives on a laptop and whether our model predicts its "
+             "epoch length. It is gated on the accuracy check, with the barrier loop as fallback.")
 
 
 def slide_hard(prs, n):
@@ -787,8 +799,8 @@ def slide_hard(prs, n):
          "BFS cost depends on the drawn pair, so equal sample counts are not equal work "
          "per thread."),
         ("PERFORMANCE", "Synchronization cadence",
-         "Testing after every sample is mostly barrier; testing rarely wastes samples past "
-         "the stopping point."),
+         "Too frequent is mostly barrier; too rare wastes samples past the stop. The best "
+         "interval moves with the graph."),
         ("BOTH", "Overflow and setup cost",
          "σ needs checked 64-bit counters. The diameter and pilot can outweigh the loop, so "
          "the loop is timed alone."),
@@ -828,38 +840,37 @@ def slide_parallel(prs, n):
 
     with capture() as knob1:
         card(s, 0.6, 1.5, 6.0, 4.0, None)
-        text(s, 0.88, 1.66, 5.5, 0.3, "STUDY 2  ·  OPENMP SCHEDULE", size=10.5, color=TEAL,
-             font=FONT_SEMI)
-        text(s, 0.88, 1.93, 5.5, 0.35, "Even sample counts, uneven work", size=15,
-             color=NAVY, font=FONT_SEMI)
-    sched_pic = _track(s.shapes.add_picture(str(sched_png), Inches(0.82), Inches(2.4),
-                                            Inches(5.55), Inches(2.75)))
-    sched_note = text(s, 0.88, 5.17, 5.5, 0.3,
-                      "Hatched = idle at the barrier. Illustrative costs.",
-                      size=10.5, color=MUTED)
+        text(s, 0.88, 1.66, 5.5, 0.3, "OUR CONTRIBUTION  ·  PREDICTED CHECK INTERVAL",
+             size=10.5, color=ORANGE, font=FONT_SEMI)
+        text(s, 0.88, 1.93, 5.5, 0.35, "The best k moves; the 2019 constant does not",
+             size=15, color=NAVY, font=FONT_SEMI)
+    k_pic = _track(s.shapes.add_picture(str(k_png), Inches(0.82), Inches(2.4), Inches(5.55),
+                                        Inches(2.75)))
+    k_note = text(s, 0.88, 5.17, 5.6, 0.3,
+                  "k^{*} = √(2MCT / s), with s, C, and M estimated from KADABRA's own pilot.",
+                  size=10.5, color=MUTED)
 
     with capture() as knob2:
         card(s, 6.73, 1.5, 6.0, 4.0, None)
-        text(s, 7.01, 1.66, 5.5, 0.3, "STUDY 3  ·  BATCH LENGTH k", size=10.5, color=ORANGE,
+        text(s, 7.01, 1.66, 5.5, 0.3, "SECONDARY  ·  OPENMP SCHEDULE", size=10.5, color=TEAL,
              font=FONT_SEMI)
-        text(s, 7.01, 1.93, 5.5, 0.35, "How often to run the stopping test", size=15,
+        text(s, 7.01, 1.93, 5.5, 0.35, "Even sample counts, uneven work", size=15,
              color=NAVY, font=FONT_SEMI)
-    k_pic = _track(s.shapes.add_picture(str(k_png), Inches(6.95), Inches(2.4), Inches(5.55),
-                                        Inches(2.75)))
-    k_note = text(s, 7.01, 5.17, 5.5, 0.3,
-                  "Sweep: static · dynamic · guided × 1, 2, 4, all physical cores × fixed set "
-                  "of k.", size=10.5, color=MUTED)
+    sched_pic = _track(s.shapes.add_picture(str(sched_png), Inches(6.95), Inches(2.4),
+                                            Inches(5.55), Inches(2.75)))
+    sched_note = text(s, 7.01, 5.17, 5.5, 0.3,
+                      "Hatched = idle at the barrier. Illustrative costs.",
+                      size=10.5, color=MUTED)
 
     rules = [
-        ("Study 1: barrier vs lock-free",
-         "local-frame drops the barrier with epochs and release/acquire. Does the 2019 win "
-         "survive at 1 to 8 cores?"),
-        ("Same paths every run",
-         "Sample i uses the RNG stream (seed, i), not the thread id, so a timing gap is what "
-         "we changed, not the workload."),
-        ("Stop test sees a whole prefix",
-         "A legal stopping time for Theorem 1. Testing every k can only stop later, by ≤ k − 1 "
-         "samples."),
+        ("Same paths under every schedule",
+         "Sample i uses the RNG stream (seed, i), not the thread id, so timing differences "
+         "are the schedule."),
+        ("Private counts, fixed-order merge",
+         "Each thread fills its own count vector; the barrier merges them in a fixed order."),
+        ("k fixed before the main loop",
+         "Chosen from the discarded pilot, so the stop is still a legal stopping time for "
+         "Theorem 1."),
     ]
     w = 3.93
     rule_steps = []
@@ -874,19 +885,22 @@ def slide_parallel(prs, n):
     footer(s, n)
     animate(s, [
         step(knob1, dur=400),
-        step([sched_pic], effect="wipe_left", dur=1400),
-        step([sched_note], dur=300),
-        step(knob2, dur=400),
         step([k_pic], effect="wipe_left", dur=1400),
         step([k_note], dur=300),
+        step(knob2, dur=400),
+        step([sched_pic], effect="wipe_left", dur=1400),
+        step([sched_note], dur=300),
     ] + rule_steps)
-    notes(s, "Threads keep private counts. The barrier version merges them at a barrier; the "
-             "lock-free local-frame version publishes them per epoch with release/acquire, no "
-             "barrier. The stopping test only ever sees a whole finished prefix, so the "
-             "guarantee holds either way. Our three studies: barrier vs lock-free across cores, "
-             "the OpenMP schedule for uneven BFS cost, and the batch length k that trades "
-             "synchronization against samples wasted after the stop. The charts are what we "
-             "expect, not results.")
+    notes(s, "Threads keep private counts and merge at a barrier every k samples; the stopping "
+             "test only sees that merged prefix, so the guarantee holds. The 2019 paper tuned "
+             "k once and fixed it at 1000. Our contribution: checks cost (M/k)·C, and the "
+             "stop is seen about k/2 samples late, so the best interval is "
+             "k* = sqrt(2MCT/s). It grows with graph size and threads and shrinks when samples "
+             "are costly. We estimate s, C, and M from KADABRA's own pilot and test the "
+             "prediction against a sweep, N = 1000, and N = 11. The schedule comparison is "
+             "secondary. Planned second pillar, after the model is measured: rebuild 2019 local-frame to measure "
+             "whether its advantage survives here, and whether an adapted model predicts "
+             "its epoch length. The charts are shapes, not results.")
 
 
 def slide_evaluation(prs, n):
@@ -920,18 +934,20 @@ def slide_evaluation(prs, n):
         picture(s, f_speed, 6.76, top - 0.02, center_in=5.97, max_w=4.2)
     perf_text = text(s, 7.04, top + 0.85, 5.4, 2.8, [
         {"t": "**Fixed budget:** identical paths serial and parallel, barrier paid every k. "
-              "Compares schedules and k at equal work.", "after": 9},
-        {"t": "**Adaptive:** time to a valid stop, samples taken, and samples past the stop.",
-         "after": 9},
-        {"t": "**Method:** sampling loop timed alone; ≥ 20 interleaved runs; medians and "
-              "spread; pinned threads; CPU, compiler, flags reported."},
-    ], size=14, bullet="•", spacing=1.08)
+              "Compares schedules (and local-frame) at equal work.", "after": 6},
+        {"t": "**Adaptive:** time to a valid stop and samples past it, at swept k, predicted "
+              "k^{*}, N = 1000, and N = 11.", "after": 6},
+        {"t": "**Model test:** best measured k vs k^{*} across graph size, diameter "
+              "(Watts–Strogatz), and threads.", "after": 6},
+        {"t": "**Method:** loop timed alone; ≥ 20 interleaved runs; medians and spread; "
+              "pinned same-kind cores; CPU, compiler, flags reported."},
+    ], size=12.5, bullet="•", spacing=1.05)
 
     with capture() as risk:
         box(s, 0.6, 6.2, 12.13, 0.62, fill=ORANGE_LIGHT, rounded=True, radius=0.2)
         text(s, 0.88, 6.2, 11.6, 0.62,
-             "**Main risk:** schedule and k may barely matter on a laptop. We would still "
-             "report idle time, barrier cost, and extra samples as the finding.",
+             "**Main risk:** the model misses a term, or k barely matters on a laptop. The "
+             "separate sweep shows either. The lock-free pillar is gated on correctness and can slip without sinking us.",
              size=12.5, color=INK, anchor=MSO_ANCHOR.MIDDLE)
     footer(s, n)
     animate(s, [step(corr_card, dur=400)] + check_steps + [
@@ -943,7 +959,8 @@ def slide_evaluation(prs, n):
     notes(s, "Correctness is statistical: the fraction of seeds whose max error exceeds lambda "
              "must stay at or below delta, after both outputs use the same normalization. "
              "Performance uses a fixed sample budget for clean speedup, and a separate "
-             "adaptive mode for time to a valid stop.")
+             "adaptive mode for time to a valid stop, where the predicted k* is tested against "
+             "the sweep and the fixed constants.")
 
 
 def slide_closing(prs, n):
@@ -961,7 +978,7 @@ def slide_closing(prs, n):
     recap = []
     for i, line in enumerate([
         "Sample shortest paths instead of running every BFS",
-        "Run the samples in parallel with OpenMP",
+        "Parallel with OpenMP; check every k^{*} samples, not a fixed N",
         "Stay within λ of exact Brandes, with probability 1 − δ",
     ]):
         y = 3.85 + i * 0.62
@@ -985,8 +1002,8 @@ def slide_closing(prs, n):
         step([question], dur=500),
         step([names], dur=400),
     ])
-    notes(s, "Close in one line: sample paths, run them in parallel, and stay within λ of "
-             "Brandes. Then take questions.")
+    notes(s, "Close in one line: sample paths, run them in parallel with a check interval "
+             "predicted from the graph, and stay within λ of Brandes. Then take questions.")
 
 
 def main():

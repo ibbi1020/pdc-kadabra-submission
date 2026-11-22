@@ -39,7 +39,7 @@
 \toprule
 \textbf{Name} & \textbf{Roll number} & \textbf{Section} & \textbf{Email} \\
 \midrule
-Ibraheem Farooq & 23i-0816 & D & i230816@isb.nu.edu.pk \\
+Ibraheem Farooq (contact) & 23i-0816 & D & i230816@isb.nu.edu.pk \\
 Musab Saleem & 23i-0857 & D & i230857@isb.nu.edu.pk \\
 \bottomrule
 \end{tabular}
@@ -47,6 +47,8 @@ Musab Saleem & 23i-0857 & D & i230857@isb.nu.edu.pk \\
 
 
 \section{Understanding the paper}
+
+In plain terms: some vertices sit on the routes between many other pairs, like a bridge joining two halves of a city, and betweenness centrality measures how much. Computing it exactly means a shortest-path search from every vertex, which is too slow on large graphs. KADABRA samples instead. It picks a random pair, finds one shortest path between them, credits every vertex in the middle of that path, and repeats. Its real contribution is knowing when to stop: it keeps an error bar for every vertex, stops as soon as all of them are narrow enough, and proves that stopping on the data in this way still delivers the promised accuracy. The rest of this section gives the details.
 
 \subsection{The graph problem}
 
@@ -82,8 +84,19 @@ The following is Algorithm~1 of the paper, for the all-vertices additive-error t
 \omega \;=\; \frac{c}{\lambda^2}\left(\lfloor \log_2(\mathrm{VD}-2)\rfloor + 1 + \log\frac{2}{\delta}\right),
 \]
 where $c$ and the form of the bound are taken from Riondato and Kornaropoulos, and the failure probability plugged into their theorem is $\delta/2$. The $\log_2$ is the VC-dimension term. The $\log(2/\delta)$ is the natural logarithm that inverts the exponential tail. After $\omega$ samples, every vertex is within additive error $\lambda$ with probability at least $1-\delta/2$, even if the adaptive test never fires.
-\item Give each vertex its own small share of the failure probability, then freeze those shares. The algorithm is correct for any positive per-vertex budgets $\delta_L^{(v)}, \delta_U^{(v)}$ whose total is at most $\delta/2$. The paper's heuristic, \texttt{computeDelta}, spends a small pilot of about $\omega/100$ paths to get a rough estimate of each vertex, then hands the busier vertices a larger share, with a tiny floor so no share is ever zero, since the bounds take a logarithm of it. The pilot paths are then discarded. They are not part of the published average, because folding them in would make the budgets depend on the same samples as the estimate, which the paper leaves open. We will transcribe the exact constants from the reference code rather than restate them here.
-\item Start the counts at zero. Until $\tau$ reaches $\omega$, draw one uniform shortest path, add one to the count of every vertex strictly inside it, increment $\tau$, and evaluate the stopping test. The test is simply $f\le\lambda$ and $g\le\lambda$ at every vertex. Here $f$ and $g$ are a shrinking pair of error bars, an upper and a lower one. They come from a martingale concentration bound, and they depend on the current estimate, the vertex's frozen budget, the cap $\omega$, and how many samples $\tau$ have been drawn so far. We transcribe their closed forms from Theorem~2 and check them numerically against the reference code. If the test passes, stop; if it never does, stop at $\omega$ and rely on the fixed-sample bound.
+\item Choose a per-vertex failure budget $\delta_L^{(v)}, \delta_U^{(v)}$ and then freeze it. The algorithm is correct for any positive budgets whose sum is at most $\delta/2$. The paper's heuristic, \texttt{computeDelta}, spends a pilot of $\alpha=\omega/100$ paths, sets $c_L(v)=2\tilde b(v)\,\omega/(\lambda_L^{(v)})^2$ and likewise for $c_U$, and binary-searches a constant $C$ so that
+\[
+\sum_{v\in V}\exp\left(-\frac{C}{c_L(v)}\right)+\exp\left(-\frac{C}{c_U(v)}\right)
+\;=\; \frac{\delta}{2}-\epsilon\delta
+\]
+with $\epsilon=0.0001$. It then sets $\delta_L^{(v)}=\exp(-C/c_L(v))+\epsilon\delta/(2n)$, and likewise for $\delta_U$. For the all-vertices task, $\lambda_L^{(v)}=\lambda_U^{(v)}=\lambda$. The $\epsilon\delta/(2n)$ floor keeps every budget strictly positive, which the logarithms need. The pilot counts are discarded. They are not part of the published average. Mixing them in would make the budgets depend on the same samples as the estimate, which the paper leaves as an open problem.
+\item Set $\tau=0$ and every count to 0. Until $\tau=\omega$, draw one uniform shortest path with \texttt{samplePath}, add one to the count of each intermediate vertex, increment $\tau$, and evaluate the stopping test. For additive error the test is simply $f\le\lambda$ and $g\le\lambda$ for every vertex. The functions $f$ and $g$ are the closed forms in the paper's Theorem~2 (equations~(2) and~(3) of the proceedings). They are what you get by inverting the martingale tail
+\[
+\Pr\!\left(\tau\tilde b-\tau\,bc \ge \lambda_L\right)
+\;\le\;
+\exp\!\left(-\frac{\lambda_L^2}{2(\omega\,bc+\lambda_L/3)}\right)
+\]
+and rewriting the deviation in terms of the observed estimate, the frozen $\delta_L^{(v)}$ or $\delta_U^{(v)}$, the cap $\omega$, and the current $\tau$. If the test passes, stop. If it never passes, stop at $\omega$ and rely on the VC bound.
 \item Divide every count by $\tau$ and return the vector.
 \end{enumerate}
 
@@ -111,26 +124,18 @@ A zero pilot estimate makes $c_L(v)=0$. The derivation then gives that vertex a 
 
 \subsection{What we will build}
 
-The catalogue task, sampling shortest paths in parallel and checking the error against exact centrality, is the floor of the committed work, not the ceiling. A plain parallel loop with a barrier is exactly the baseline the 2019 paper starts from, so if we stopped there our contribution would be very thin. To have something real to measure, we also re-implement one of that paper's lock-free variants, and our contribution is three measurement studies that sit on top of these implementations. The reasoning behind this choice, and why dropping the lock-free piece would gut the contribution, is written down for future readers in \texttt{AGENTS.md} at the repository root.
+The catalogue task is the whole of the committed work: estimate betweenness by sampling shortest paths on a small graph, run those samples in parallel, and compare the error with exact centrality. The parallel part has to be a real use of the course, not a loop that happens to be parallel. The 2019 OpenMP paper of van der Grinten, Angriman, and Meyerhenke already showed that a synchronized loop over KADABRA samples loses most of its scaling to the barrier, and replaced that barrier with lock-free epochs. Reimplementing those epochs would be their contribution. We cite that paper as the published baseline, and we rebuild one of its lock-free variants as a planned second pillar, as something to measure rather than something we claim. The same paper also tuned how often the synchronized loop checks the stopping condition: its appendix tries several intervals and fixes $N=1000$ samples for every input. Re-running that sweep on a laptop would also be their work, so it is not our contribution either.
 
-We will write four pieces, in this order.
+We will write four pieces, in this order: three that carry the committed work, and a fourth, the lock-free version, that we plan to build as the hands-on parallel pillar once the first three are measured.
 
 \begin{enumerate}
 \item A sequential adaptive sampler that follows Section~\ref{sec:plan-baseline}, together with our own Brandes implementation as the exact oracle. The path sampler is a one-sided BFS from $s$ with $\sigma$-weighted backtracking from $t$. It draws a uniformly random shortest path. It is not the balanced bidirectional search. On the small graphs we can check by Brandes, a full BFS is cheap, and the bidirectional search is a speed optimization for one sample rather than the definition of the estimator. Any speedup we report comes from running samples in parallel.
-\item An OpenMP loop that evaluates a batch of independent samples and then meets at a barrier so the stopping test can see a consistent prefix of the sample sequence. This is the straightforward parallelization and the 2019 baseline, and it is also our safe fallback, because on its own it is already a correct parallel implementation.
-\item A lock-free version, the \texttt{local-frame} scheme from the 2019 paper. Each thread keeps its own count vectors and advances in numbered epochs. A thread never writes an epoch that another is reading, and the stopping test reads a finished epoch through release and acquire ordering, with no barrier. We re-implement this one variant as a measured baseline, not as our own idea. The guide is clear that reproducing a method does not by itself count, so what we claim is the measurement, not the mechanism.
-\item The part that is ours: three controlled studies on these loops, listed next.
+\item An OpenMP loop that evaluates a batch of independent samples and then meets at a barrier so the stopping test can see a consistent prefix of the sample sequence. This is the straightforward parallelization. The 2016 paper says the sampling loop is easy to parallelize. The 2019 paper measured that synchronized loop as its baseline. We will say that in the report.
+\item The part that is ours: a rule that \emph{predicts} the check interval $k$ for each graph and thread count, instead of the single tuned constant. The 2019 appendix says the interval trades the cost of a check against the cost of sampling, but both costs change with the graph and with the number of threads, and the paper uses one value everywhere. We write that trade-off as a cost model, derive the interval that minimizes it, estimate the model's inputs from the pilot that KADABRA already runs, and test the prediction against a measured sweep and against the fixed $N=1000$ and the original $N=11$ (Section~\ref{sec:plan-contribution}). A secondary result on the same loop compares \texttt{static}, \texttt{dynamic}, and \texttt{guided} scheduling, because per-sample cost varies with the pair that was drawn and the 2019 paper does not vary the schedule. We will not change $f$, $g$, $\omega$, or the frozen budgets, so a result that exceeds $\lambda$ is a bug in our sampler or our snapshot, not a new stopping rule.
+\item A planned second pillar, built once item~3 is measured: the 2019 \texttt{local-frame} scheme. Each thread keeps two private copies of its counts and publishes them in numbered epochs with release and acquire ordering, so a check never forces a barrier. Rebuilding it is their method, not ours, but it is the hands-on parallel work the course rewards most, and it gives our cost model a second, harder test. It is gated on the same accuracy check, and the barrier loop stays as the fallback, so nothing we must deliver depends on it. We would use it for two questions. Does its advantage over the barrier loop, measured on a 32-core server, survive at a few cores on small graphs? And does an adapted version of our cost model predict its best epoch length, which the 2019 paper sets from the thread count alone? The model needs adapting because only one thread pauses to check while the others keep sampling.
 \end{enumerate}
 
-Our three contributions are measurement studies. All are validated against exact Brandes and run on our own small graphs.
-
-\begin{enumerate}
-\item \textbf{Barrier against lock-free at laptop scale.} The 2019 finding that the lock-free scheme beats the barrier was measured on a 32 to 36 core server. We ask whether it still holds at one, two, four, and as many physical cores as our machine has, and we report the point where the ordering flattens or reverses, with the cause we can measure.
-\item \textbf{Schedule.} Per-sample cost varies with the pair that was drawn, so \texttt{static}, \texttt{dynamic}, and \texttt{guided} do not do the same thing. We measure which one cuts the idle time left at the barrier.
-\item \textbf{Batch length.} The stopping test is correct at any prefix, so it need not run after every sample. Checking every $k$ samples trades a barrier against up to $k-1$ extra samples past the point the test would already have passed. We map that trade-off.
-\end{enumerate}
-
-We do not change $f$, $g$, $\omega$, or the frozen budgets, so a result that exceeds $\lambda$ is a bug in our sampler or our snapshot, not a new stopping rule. The course concepts exercised are decomposition into independent samples, OpenMP worksharing schedules, barrier synchronization for a consistent reduction, and lock-free publication with release and acquire ordering.
+The course concepts are decomposition into independent samples, barrier synchronization for a consistent reduction, the cost of that synchronization against useful work, and OpenMP worksharing schedules. The second pillar adds lock-free publication with release and acquire memory ordering.
 
 \subsection{What we will leave out}
 
@@ -138,7 +143,7 @@ We do not change $f$, $g$, $\omega$, or the frozen budgets, so a result that exc
 \item The balanced bidirectional BFS. Understood, not implemented. Our samples are one-sided.
 \item The top-$k$ stopping test.
 \item Edge betweenness, weighted graphs, and dynamic graphs. The paper sketches these as adaptations. Our graphs are unweighted. We commit to undirected graphs, with one small directed graph as a sanity check that the same BFS walks out-neighbours. We do not run the schedule study twice.
-\item Two of the three 2019 lock-free frames. We build \texttt{local-frame} and measure it against the barrier; we leave out \texttt{shared-frame} and the deterministic \texttt{indexed-frame}. One lock-free variant, done correctly and measured, is enough for two weeks, and we do not claim the mechanism as our own.
+\item The 2019 \texttt{shared-frame} and \texttt{indexed-frame} variants. \texttt{local-frame} is a stretch goal only, and a baseline even then. A private count vector that is merged at a barrier is ordinary OpenMP. It is not their epoch mechanism, and we will not describe it as one.
 \item MPI, and any GPU sampler. We have one machine. The irregular BFS is a poor OpenCL kernel for a two-week project.
 \item A new concentration bound, and any attempt to use fewer samples than SILVAN. That line of work already has public code and a published margin over KADABRA. Our question is how the parallel loop behaves.
 \end{itemize}
@@ -151,19 +156,19 @@ The backtracking weights $\sigma_{sp}/\sigma_{su}$ have to be right. A uniform c
 
 A pair in a different component has no path. Under the paper's normalization that pair is a valid sample: it increments $\tau$ and credits nobody. Drawing a new pair until the two vertices are connected estimates a different quantity and will not match Brandes. The implementation has to do the first of these.
 
-The stopping test has to see a whole prefix. If one thread has added a path and another has not, the averages and the sample count do not describe the same set of paths, and the theorem does not apply. On a laptop processor with a strong memory model, a missing fence or a racy read can survive casual tests. The check that catches it is the Brandes comparison over many seeds.
+The stopping test has to see a whole prefix. If one thread has added a path and another has not, the averages and the sample count do not describe the same set of paths, and the theorem does not apply. On a laptop processor with a strong memory model, a missing fence or a racy read can survive casual tests, and in the lock-free stretch it can survive every ordinary test. The check that catches it is the Brandes comparison over many seeds.
 
-The lock-free version is where this turns genuinely hard. Removing the barrier means the order of writes is no longer enforced for us, so we have to place the release and acquire ourselves, such that a thread reading a finished epoch sees every write that belongs to it and none that do not. The strong memory model works against us here: the wrong ordering usually still prints the right answer in a quick test, so the bug hides until the many-seed accuracy check exposes it. This is the main technical risk of the project, and the reason the barrier loop is built first and kept as a fallback.
+The prefix also has to be cut by sample count, never by the clock. Short paths finish first, so a snapshot of whatever had finished at some moment over-represents cheap samples and biases every score. The estimate we report and the stopping decision use exactly the same finished samples.
 
 Path counts have to fit in a 64-bit integer. We will assert that, and we will keep the generated graphs inside that limit. A silent cast to double is not an acceptable fix.
 
-The OpenMP question is real on this kernel. A static split of a batch gives equal numbers of samples to each thread and unequal amounts of BFS work. A dynamic or guided split hands out the next sample index when a thread finishes. Separately, a barrier after every sample makes the parallel section as long as the synchronization, and a barrier after a huge batch throws away the adaptivity the paper exists to provide. Which schedule and which $k$ win on a few cores is not answered by the 2019 server results.
+The OpenMP question is real on this kernel. A static split of a batch gives equal numbers of samples to each thread and unequal amounts of BFS work. A dynamic or guided split hands out the next sample index when a thread finishes. Separately, a barrier after every sample makes the parallel section as long as the synchronization, and a barrier after a huge batch throws away the adaptivity the paper exists to provide. The 2019 paper settled this with one number tuned on large graphs at 32 threads. A rule that is supposed to hold across graphs has to get the dependence on the number of vertices, the cost of a sample, and the thread count right, and each of those can be checked separately.
 
 On a small graph the diameter computation and the pilot of $\omega/100$ paths can take longer than the region we mean to compare. We will time the sampling loop on its own.
 
 \subsection{Why the scope fits}
 
-There are two people and about two weeks after this proposal. The sequential sampler, Brandes, and one correct barrier loop are a few hundred lines, and they are the catalogue task and our fallback. The lock-free version is the technically demanding piece, and it is what makes the parallel implementation meaningful rather than a loop that happens to be parallel; it is also the riskiest, which is why the barrier loop is built first and kept as a safe baseline. The three studies reuse these two loops rather than adding a third algorithm. Exact betweenness stays cheap because we refuse graphs that Brandes cannot finish. The guide scores a carefully measured small or negative speedup as a result, so even the likely outcome, that the lock-free advantage is faint at a few cores, is a finished project when the measurement and the explanation are sound. This is the right size of challenge for the course: the lock-free reduction is a real exercise of synchronization, and the three studies are a real exercise of work distribution and measurement, without over-reaching into MPI, a GPU, or a new bound.
+There are two people and about two weeks after this proposal. The sequential sampler, Brandes, and one correct barrier loop are a few hundred lines, and they are the catalogue task. The check-interval model and the schedule comparison are the work that the parallel-implementation marks ask for. Both reuse that loop rather than adding a second algorithm, and the model needs only timers and one formula on top of it. The lock-free version is the one piece that adds a second parallel algorithm. It is the hands-on parallel work the course rewards most, so we plan to build it, but it comes after the model is measured and is gated on correctness, so nothing we must deliver depends on it. Exact betweenness stays cheap because we refuse graphs that Brandes cannot finish. The project guide scores a carefully measured small or negative speedup as a result. A laptop on which \texttt{static} and \texttt{dynamic} differ by very little is a possible outcome, and it is a finished project if the measurement and the explanation are sound.
 
 \section{Implementation plan and attribution}
 \label{sec:plan}
@@ -187,32 +192,61 @@ The sampler:
 
 We will transcribe $f$ and $g$ from Theorem~2 and check them on fixed inputs against \url{https://github.com/natema/kadabra}. The closed form and the simplified square-root form in the appendix are not the same expression, so a numeric mismatch means we stop and resolve the transcription before any experiment. It does not mean we edit the test until Brandes is happy.
 
-\subsection{Parallelization and the contribution}
+\subsection{Parallelization}
 
-A batch is $k$ consecutive sample indices. Each thread keeps a private count vector for the batch. The OpenMP loop uses \texttt{schedule(static)}, \texttt{schedule(dynamic)}, or \texttt{schedule(guided)}. In the barrier version, when the batch finishes the threads meet at a barrier and the private vectors are added into the global counts in a fixed order. The stopping test, and the vector we would return if we stopped, use that merged prefix and no other paths. In-flight work is not part of the estimate.
+A batch is $k$ consecutive sample indices. Each thread keeps a private count vector for the batch. The OpenMP loop uses \texttt{schedule(static)}, \texttt{schedule(dynamic)}, or \texttt{schedule(guided)}. When the batch finishes, the threads hit a barrier and the private vectors are added into the global counts in a fixed order. The stopping test, and the vector we would return if we stopped, use that merged prefix and no other paths. In-flight work is not part of the estimate.
 
-The lock-free version keeps the same private vectors but removes the barrier. Each thread tags its finished batch with an epoch number and publishes it with a release write. When a stopping test is due, the threads advance to a new epoch, and the test reads the finished epoch through acquire reads, so it still sees a whole prefix of completed samples without every thread halting at the same instant. This is the \texttt{local-frame} idea, and its behaviour against the barrier is the first of our three studies.
+This is a legal stopping time for the paper's theorem. The decision depends only on a prefix of the sample sequence, and the prefix length is at most $\omega$. Checking every $k$ samples can only stop later than checking every sample. It does not stop on a state the theorem does not cover. The price is at most $k-1$ extra paths after the first index where the test would have passed. That price, against the cost of the barrier, is what the contribution models.
 
-This is a legal stopping time for the paper's theorem. The decision depends only on a prefix of the sample sequence, and the prefix length is at most $\omega$. Checking every $k$ samples can only stop later than checking every sample. It does not stop on a state the theorem does not cover. The price is at most $k-1$ extra paths after the first index where the test would have passed. That price, against the cost of the synchronization, is what we measure.
+Because sample $i$ is tied to index $i$, a static run and a dynamic run with the same master seed draw the same paths. A timing difference is then the schedule, not a different random workload.
 
-Because sample $i$ is tied to index $i$, two runs with the same master seed draw the same paths, whichever schedule, synchronization, or thread count they use. A timing difference is then the thing we changed, not a different random workload.
+\subsection{The contribution: predicting the check interval}
+\label{sec:plan-contribution}
 
-The committed comparison, on the same graphs and the same $(\lambda,\delta)$, is the three studies named earlier:
+Let $T$ be the number of threads, $s$ the mean time of one sample on one thread, $C$ the wall time of one check at $T$ threads (the barrier, the merge of $T$ private vectors of length $n$, and $f$ and $g$ on every vertex), and $M$ the index of the first prefix on which the stopping test passes. With a check every $k$ samples, a run takes about
+\[
+\underbrace{\frac{M s}{T}}_{\text{sampling}}
+\;+\;
+\underbrace{\frac{M}{k}\,C}_{\text{checks}}
+\;+\;
+\underbrace{\frac{k}{2}\cdot\frac{s}{T}}_{\text{samples past the stop}} .
+\]
+The first term does not depend on $k$. The second falls as $k$ grows. The third rises, because the stop is only seen at the next multiple of $k$ after $M$, on average $k/2$ samples late. The sum is smallest at
+\[
+k^\ast \;=\; \sqrt{\frac{2\,M\,C\,T}{s}} .
+\]
+Three predictions follow, and each can be tested on its own. $k^\ast$ grows with the size of the graph, because $C$ contains passes over all $n$ vertices. $k^\ast$ grows by about $\sqrt{2}$ each time the thread count doubles. $k^\ast$ falls when samples get more expensive, as they do on graphs with a larger diameter. The 2019 constant has none of these dependences. The overhead is also flat near its minimum: a $k$ that is off by a factor of two costs 25\% more overhead than $k^\ast$, and one off by $\sqrt{2}$ about 6\%. The inputs therefore only need rough estimates.
+
+We estimate all three from work the algorithm already does before the main loop. $s$ is the mean time per sample in the pilot of $\omega/100$ paths that \texttt{computeDelta} draws. $C$ is the time of a few barrier, merge, and test rounds on the pilot's counts. $M$ is predicted by putting the pilot estimates into $f$ and $g$ and binary-searching the smallest $\tau\le\omega$ at which every vertex would pass. $k$ is then fixed for the whole run. It depends only on the discarded pilot and on clock readings, never on the main loop's samples, so it has the same standing in the proof as any other fixed $k$.
+
+The committed comparison, on the same graphs and the same $(\lambda,\delta)$:
 
 \begin{itemize}
-\item \textbf{Barrier against \texttt{local-frame}}, at 1, 2, 4, and all physical cores. Same paths per seed, so the gap is the synchronization and nothing else.
-\item \textbf{Schedule}: \texttt{static}, \texttt{dynamic}, and \texttt{guided}, for the uneven per-sample cost.
-\item \textbf{Batch length} $k$: from one sample up to a batch that is a visible fraction of $\omega$, the same set everywhere.
+\item Check interval: a sweep of $k$ on a logarithmic scale from one sample to a visible fraction of $\omega$, the pilot-chosen $k^\ast$, and the fixed $N=1000$ and $N=11$. We report time to a valid stop, the samples taken past the stop, and the measured $C$ and $s$.
+\item The model's three predictions: the measured best $k$ against $k^\ast$ across graph sizes, across a family whose diameter changes while $n$, $m$, and the degree stay fixed (Watts--Strogatz rewiring), and at 1, 2, 4, and as many threads as the machine has physical cores. We will not report a thread count above that.
+\item Schedules: \texttt{static}, \texttt{dynamic}, and \texttt{guided}, at the same thread counts.
 \end{itemize}
 
-We will not report a thread count above the machine's physical cores. The expected behaviour is concrete. Removing the barrier should help more as threads are added, so the gap between the two versions should widen with core count if it appears at all. A dynamic or guided split should cut the idle time a static split leaves. Some intermediate $k$ should beat both $k=1$ and a single batch of size $\omega$. If a curve is flat, that is the result we will explain, using the per-sample times and the synchronization cost we recorded.
+If the model is right, the measured optimum should sit within about a factor of two of $k^\ast$, and the pilot-chosen $k$ should finish within a few percent of the best $k$ in the sweep on every graph, while a fixed $N$ is close on some graphs and far on others. If the optimum does not move the way the model says, we will report which term was wrong, using the measured $C$, $s$, and overshoot. Either outcome is a result the 2019 paper does not contain: it gives a constant, not a reason. For the schedules, a dynamic or guided split should cut the idle time that a static split leaves at the barrier on graphs whose BFS costs vary. A flat result there is explained with the per-sample times we record.
+
+\subsection{The second pillar: the 2019 local-frame scheme}
+\label{sec:plan-stretch}
+
+We plan to build this as the second pillar, once Section~\ref{sec:plan-contribution} is measured and written up. We rebuild one of the 2019 lock-free variants, \texttt{local-frame}. Each thread keeps a pair of private count vectors and publishes them in numbered epochs with release and acquire ordering, so a check never forces a barrier. Rebuilding it is their method. We write it ourselves so we can measure it, and we will say so. The two questions we would ask are:
+
+\begin{itemize}
+\item Does its advantage over the barrier loop, measured on a 32-core server, survive at one, two, four, and eight cores on our small graphs? The 2019 paper's own scaling figure already slopes that way. We would report the crossover and the causes we can measure: epoch-transition latency, the serial accumulate on thread~0, and the small cost of one sample.
+\item Does an adapted cost model predict its best epoch length? The 2019 paper sets that length from the thread count alone. In their design only one thread pauses to check while the others keep sampling, so the overshoot term differs from the barrier loop's, and the model has to be rewritten before it is tested.
+\end{itemize}
+
+Nothing committed depends on this. If the accuracy check over many seeds fails, its timings are discarded. If we run out of time, the barrier loop and the predicted interval still stand.
 
 \subsection{Prior work we compare against}
 
 The guide asks us to name any later paper that already implemented the approach we propose, and to treat it as a baseline rather than as our idea.
 
 \begin{itemize}
-\item van der Grinten, Angriman, and Meyerhenke (Euro-Par 2019) parallelized adaptive betweenness sampling in OpenMP. Their synchronized loop is our baseline, and their lock-free epoch machinery is their contribution, not ours. We re-implement one variant of it, \texttt{local-frame}, so we can measure it against the barrier at laptop scale. The mechanism is theirs and we say so; what we add is the measurement. They report about a 6-fold speedup for the plain OpenMP version on 32 cores, and up to about 3 times more for the lock-free variants. Those numbers were measured on a server. They will appear in our report only as published context. Every number we claim will come from our own runs.
+\item van der Grinten, Angriman, and Meyerhenke (Euro-Par 2019) parallelized adaptive betweenness sampling in OpenMP. Their synchronized loop is the baseline. Their contribution is the lock-free epoch machinery. We rebuild at most one variant, \texttt{local-frame}, as a stretch baseline. Their appendix also tunes the synchronized loop's check interval once and fixes it at $N=1000$, against $N=11$ in the original code. Both constants are baselines for our predicted interval. They report about a 6-fold speedup for the plain OpenMP version on 32 cores, and up to about 3 times more for the lock-free variants. Those numbers were measured on a server. They will appear in our report only as published context. Every number we claim will come from our own runs.
 \item van der Grinten and Meyerhenke (IPDPS 2020) is the MPI version. We do not implement it. It is cited so the scope boundary is explicit.
 \item Pellegrina and Vandin (SILVAN, 2023) reduce the number of samples relative to KADABRA. We cite it so we do not claim that lane.
 \end{itemize}
@@ -221,7 +255,7 @@ The guide asks us to name any later paper that already implemented the approach 
 
 The authors' implementation is \url{https://github.com/natema/kadabra}, Apache-2.0, archived C++11. The 2019 algorithm also ships inside NetworKit. We may build the 2016 code and read both. We will use the 2016 code as a check on $f$, $g$, and \texttt{computeDelta}, not as the program we submit. The source we submit is ours. Cloning or repackaging either repository is not the project. If we have to patch the 2016 code to make it compile, that patch is not a contribution, and the Apache-2.0 notice stays with their code.
 
-We will generate the synthetic graphs ourselves: Erd\H{o}s--R\'enyi, Barab\'asi--Albert, and a grid large enough that diameters, and therefore BFS costs, are not all the same. No external dataset is required for the committed experiments.
+We will generate the synthetic graphs ourselves: Erd\H{o}s--R\'enyi, Barab\'asi--Albert, a grid large enough that diameters, and therefore BFS costs, are not all the same, and Watts--Strogatz graphs, whose rewiring probability changes the diameter while the vertex count, edge count, and degree stay fixed. No external dataset is required for the committed experiments.
 
 \subsection{How we will evaluate}
 
@@ -241,31 +275,32 @@ S \;=\; \frac{T_{\mathrm{serial}}}{T_{\mathrm{parallel}}}, \qquad E \;=\; \frac{
 \]
 with $P$ the number of threads. We will use two timing modes, because they answer different questions.
 
-The first mode uses a fixed sample budget. The barrier and the merge run every $k$ samples, so their cost is paid, and the stopping test does not end the run. Serial and parallel runs do the same paths. This is the comparison between schedules, and between values of $k$, at equal work.
+The first mode uses a fixed sample budget. The barrier and the merge run every $k$ samples, so their cost is paid, and the stopping test does not end the run. Serial and parallel runs do the same paths. This is the comparison between schedules, and between values of $k$, at equal work. If the stretch is built, the same fixed-budget mode compares the barrier loop with \texttt{local-frame} at equal work.
 
 The second mode leaves the adaptive test on. We report wall-clock time until a valid stop, the number of samples taken, and how many of those samples came after the first prefix on which the test was already true. This mode is random, so the sample counts are part of the result, not an inconvenience.
 
-The timed region is the sampling loop. Graph construction, the diameter, the pilot, and printing are outside it. We will take at least twenty repetitions, interleaved across the configurations we compare, and we will report medians and a spread. Threads will be pinned to physical cores. We will name the processor, the compiler, and the flags, and we will run on mains power with turbo disabled if the machine allows it. We will not copy a timing table from either paper.
+The timed region is the sampling loop. Graph construction, the diameter, the pilot, and printing are outside it. We will take at least twenty repetitions, interleaved across the configurations we compare, and we will report medians and a spread. Threads will be pinned to physical cores of one kind; on a processor with performance and efficiency cores we use only the performance cores. We will name the processor, the compiler, and the flags, and we will run on mains power with turbo disabled if the machine allows it. We will not copy a timing table from either paper.
 
 \subsection{Risks}
 
 \begin{itemize}
-\item \textbf{The schedule and the batch length barely matter on a laptop.} Plausible. We will still report the curves, the idle time, and the extra samples, and we will treat a flat curve as a finding.
-\item \textbf{The lock-free version is subtly wrong.} Removing the barrier is the one place a missing fence hides behind the strong memory model. The many-seed Brandes check is the guard, and if the lock-free version fails it we fall back to the barrier loop for any claim that rests on the guarantee.
+\item \textbf{The model misses a term.} For example, a barrier whose cost grows with the batch because of uneven BFS times, or a pilot that predicts $M$ badly. The sweep is measured independently of the model, so a wrong prediction is visible. We will report the measured $C$, $s$, and overshoot, name the term that broke, and still compare the fixed constants against the sweep.
+\item \textbf{The check interval barely matters on a laptop}, because checks are cheap next to samples on our graphs. Then the model predicts a flat curve too, and we will show that the measured curve is flat for the reason the model gives. The schedule comparison stands on its own.
 \item \textbf{A racy or partial snapshot.} The accuracy suite over many seeds is the guard. The single-threaded adaptive sampler has to match the guarantee against Brandes before any parallel number is trusted.
 \item \textbf{A biased path sample, or a connected-pair resample.} Caught by the grid and by the disconnected hand example.
 \item \textbf{A mistyped $f$, $g$, or \texttt{computeDelta}, including the zero-estimate case.} Caught by the numeric comparison with the reference code, before any performance run.
 \item \textbf{An underestimated diameter.} Avoided by computing it exactly.
 \item \textbf{Overflow of $\sigma$.} Avoided by a checked 64-bit counter and by discarding any generated graph that would overflow.
 \item \textbf{Correlated per-thread random numbers.} Avoided by tying the stream to the sample index.
-\item \textbf{We run out of time.} The catalogue task is the sequential sampler plus one correct barrier loop, and that is our fallback. The lock-free version and the three studies sit on top. If the lock-free version is not ready in time, we report the barrier results and say so, and we do not fill anything in from the 2019 paper.
+\item \textbf{The lock-free stretch is subtly wrong.} A missing fence can pass ordinary tests on strongly ordered hardware. It has to pass the same accuracy check over many seeds before any of its timings are reported, and if it fails, its timings are not used. Nothing committed depends on it.
+\item \textbf{We run out of time.} The catalogue task is the sequential adaptive sampler plus one correct parallel batch loop. The $k$ sweep, the model, and the schedule comparison sit on top of that loop, in that order, and the lock-free stretch comes last. If they are incomplete, we will report the configurations we actually ran and we will not fill the rest in from the 2019 paper.
 \end{itemize}
 
 \subsection{Who does what, and when}
 
 The implementation window runs from this proposal to 4 December. In the first week both of us write and check the CSR graph, Brandes, the diameter, the one-sided sampler, and the sequential adaptive loop, up through the hand graph and the grid. Everything later depends on those, and both of us have to be able to explain $f$, $g$, and the snapshot rule.
 
-In the second week Musab Saleem owns the OpenMP barrier loop, the lock-free \texttt{local-frame} version, and the schedule study. Ibraheem Farooq owns the batch-length study, the timing harness, and the tables. The write-up is joint. The parallel studies are attempted only after the sequential sampler has passed the Brandes check, and the lock-free version is gated on that same accuracy check before any of its numbers are trusted. Both of us will be able to explain the code, the stopping rule, the epoch snapshot, and the measurements.
+In the second week Musab Saleem owns the OpenMP batch loop, the pilot-based estimate of $k^\ast$, and the schedule comparison. Ibraheem Farooq owns the $k$ sweep, the timing harness, the Watts--Strogatz family, and the tables. The write-up is joint. The sweep is attempted only after the sequential sampler has passed the Brandes check. Once the model study is written up, we build \texttt{local-frame} together as the second pillar, because both of us have to be able to defend its memory ordering, and we gate it on the accuracy check before trusting any of its numbers. Both of us will be able to explain the code, the stopping rule, and the measurements.
 
 \begin{thebibliography}{9}
 
@@ -290,6 +325,6 @@ In the second week Musab Saleem owns the OpenMP barrier loop, the lock-free \tex
 \end{thebibliography}
 
 \vspace{1em}
-\noindent\footnotesize{AI assistance disclosure: AI tools were used to help research related work and to review and tighten the writing of this proposal. All technical decisions and claims are the group's own, and every member is responsible for the submitted content.}
+\noindent\footnotesize{AI assistance disclosure: AI tools were used to help research related work and to draft and structure this proposal. All technical decisions and claims are the group's own, and every member is responsible for the submitted content.}
 
 \end{document}
