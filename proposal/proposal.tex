@@ -29,6 +29,7 @@
  & via Random Approximation (Borassi and Natale, ESA 2016) \\
 \textbf{Catalogue task} & Sampled shortest-path betweenness on a small graph; \\
  & parallel independent samples; error against exact centrality. \\
+\textbf{Repository} & \url{https://github.com/ibbi1020/pdc-kadabra-submission} \\
 \end{tabular}
 \end{center}
 
@@ -253,7 +254,7 @@ The guide asks us to name any later paper that already implemented the approach 
 
 \subsection{Existing code}
 
-The authors' implementation is \url{https://github.com/natema/kadabra}, Apache-2.0, archived C++11. The 2019 algorithm also ships inside NetworKit. We may build the 2016 code and read both. We will use the 2016 code as a check on $f$, $g$, and \texttt{computeDelta}, not as the program we submit. The source we submit is ours. Cloning or repackaging either repository is not the project. If we have to patch the 2016 code to make it compile, that patch is not a contribution, and the Apache-2.0 notice stays with their code.
+The authors' implementation is \url{https://github.com/natema/kadabra}, Apache-2.0, archived C++11. The 2019 algorithm also ships inside NetworKit. We may build the 2016 code and read both. We will use the 2016 code as a check on $f$, $g$, and \texttt{computeDelta}, not as the program we submit. The source we submit is ours, and it lives with this proposal at \url{https://github.com/ibbi1020/pdc-kadabra-submission}. Cloning or repackaging either repository is not the project. If we have to patch the 2016 code to make it compile, that patch is not a contribution, and the Apache-2.0 notice stays with their code.
 
 We will generate the synthetic graphs ourselves: Erd\H{o}s--R\'enyi, Barab\'asi--Albert, a grid large enough that diameters, and therefore BFS costs, are not all the same, and Watts--Strogatz graphs, whose rewiring probability changes the diameter while the vertex count, edge count, and degree stay fixed. No external dataset is required for the committed experiments.
 
